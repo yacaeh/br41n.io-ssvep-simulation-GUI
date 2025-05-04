@@ -14,7 +14,7 @@ A visualization and simulation tool for SSVEP (Steady-State Visual Evoked Potent
 1. Clone this repository:
 
 ```bash
-git clone https://github.com/yourusername/SSVEP_hackathon.git
+git clone https://github.com/yacaeh/br41n.io-ssvep-simulation-GUI.git
 cd SSVEP_hackathon
 ```
 
@@ -50,6 +50,37 @@ python simulation.py
 
 The application will load available datasets from the `data/` directory. If no datasets are found, it will use default paths.
 
+## Creating Executables
+
+You can create standalone executables for both macOS and Windows using the provided build scripts:
+
+### For macOS (Recommended):
+
+```bash
+python mac_build.py
+```
+
+This will create a proper macOS application bundle (.app) with all data files included.
+The application will be in `dist/SSVEP_Simulation.app` and a ZIP archive will be created for easy distribution.
+
+### For Windows:
+
+```bash
+python build_executable.py
+```
+
+### General build script (both platforms):
+
+```bash
+python build_executable.py
+```
+
+This automatically detects your platform and builds an appropriate executable.
+
+**Note:** Each platform requires building on that platform. You can't build a Windows executable from macOS or vice versa.
+
+For more detailed control, see the `build_executables.md` file.
+
 ## Controls
 
 - **Space**: Pause/resume the simulation
@@ -82,3 +113,21 @@ If the trigger channel is not correctly detected:
 
 - Use number keys (0-9) to manually select the correct trigger channel
 - Check that your data files contain properly formatted EEG data with trigger markers
+
+### Build Issues
+
+If you encounter problems with executable creation:
+
+1. **"Failed to exec pkg" error**:
+
+   - On macOS, use the `mac_build.py` script which creates a proper app bundle
+   - Ensure your data folder exists and contains the necessary files
+
+2. **Missing data in the executable**:
+
+   - Both build scripts are configured to include the data folder
+   - Check that your data is in a folder named `data` at the project root
+
+3. **Application doesn't start**:
+   - Check console logs for missing dependencies
+   - Try running with `--debug` flag: `python build_executable.py --debug`

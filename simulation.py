@@ -59,10 +59,10 @@ cue_radius = 5
 
 # Frequency (Hz) settings
 frequencies = {
-    "top": 9,
-    "right": 10,
-    "bottom": 12,
-    "left": 15
+    "top": 15,
+    "right": 12,
+    "bottom": 10,
+    "left": 9
 }
 
 # Fixed order of LEDs for simulation (in case the file parsing fails)
