@@ -433,8 +433,8 @@ def main():
         {"path": "data/subject_2_fvep_led_training_2.mat", "name": "Subject 2 Training 2"}
     ]
     
-    # First, check all datasets to find available classes
-    all_dataset_classes = {}
+    # Just show a summary of original data extraction
+    print("=== Checking dataset label distributions ===")
     for dataset in datasets:
         try:
             # Load data
@@ -445,37 +445,20 @@ def main():
                 # Filter out invalid labels
                 valid_labels = [label for label in labels if 1 <= label <= 4]
                 unique_labels = np.unique(valid_labels)
-                all_dataset_classes[dataset["name"]] = unique_labels
-                print(f"{dataset['name']} has classes: {unique_labels}")
+                print(f"{dataset['name']} extracted classes: {unique_labels}")
         except Exception as e:
             print(f"Error checking dataset {dataset['name']}: {e}")
     
-    # Process each dataset with both original and fixed label extraction
-    results_original = {}
-    results_fixed = {}
+    # Use fixed label extraction for ALL datasets
+    results = {}
     
+    print("\n=== USING FIXED LABEL EXTRACTION FOR ALL DATASETS ===")
     for dataset in datasets:
-        # Original extraction
-        print("\n=== ORIGINAL LABEL EXTRACTION ===")
-        accuracy_original = analyze_dataset(dataset["path"], stim_freqs, dataset["name"])
-        results_original[dataset["name"]] = accuracy_original
-        
-        # Fixed extraction for datasets that don't have all classes
-        if len(all_dataset_classes.get(dataset["name"], [])) < len(stim_freqs):
-            print("\n=== FIXED LABEL EXTRACTION ===")
-            accuracy_fixed = analyze_dataset_with_fixed_labels(dataset["path"], stim_freqs, dataset["name"])
-            results_fixed[f"{dataset['name']} (Fixed)"] = accuracy_fixed
+        accuracy = analyze_dataset_with_fixed_labels(dataset["path"], stim_freqs, dataset["name"])
+        results[dataset["name"]] = accuracy
     
-    # Create a summary visualization for original results
-    visualize_accuracy_results(results_original, "original")
-    
-    # Create a summary visualization for fixed results if we have any
-    if results_fixed:
-        visualize_accuracy_results(results_fixed, "fixed")
-        
-        # Combined results
-        combined_results = {**results_original, **results_fixed}
-        visualize_accuracy_results(combined_results, "combined")
+    # Create a summary visualization
+    visualize_accuracy_results(results, "all_datasets")
 
 def visualize_accuracy_results(results, suffix=""):
     """
