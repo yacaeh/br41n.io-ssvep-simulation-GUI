@@ -6,6 +6,7 @@ SSVEP Prediction Visualization
 
 This script shows continuous prediction results for each dataset,
 similar to how the simulator works, to better visualize classification performance.
+Uses the trained combined model for predictions instead of direct FBCCA.
 """
 
 import numpy as np
@@ -13,9 +14,10 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import matplotlib.gridspec as gridspec
 import os
-from ssvep_classifier import load_data, preprocess_eeg
+from ssvep_classifier import load_data, preprocess_eeg, extract_features
 from scipy import signal
 import time
+import pickle
 
 # Create images directory if it doesn't exist
 os.makedirs('images', exist_ok=True)
@@ -25,6 +27,24 @@ os.makedirs('videos', exist_ok=True)
 fs = 256  # Sampling rate (Hz)
 stim_freqs = [15, 12, 10, 9]  # Stimulus frequencies (top, right, bottom, left)
 freq_names = ["15 Hz (Top)", "12 Hz (Right)", "10 Hz (Bottom)", "9 Hz (Left)"]
+
+# Load the trained combined model
+try:
+    print("Loading trained combined model...")
+    with open('trained_combined_model.pkl', 'rb') as f:
+        model_package = pickle.load(f)
+    
+    classifier = model_package['classifier']
+    scaler = model_package['scaler']
+    classifier_name = model_package['best_classifier_name']
+    training_acc = model_package['training_accuracy']
+    
+    print(f"Loaded {classifier_name} model with training accuracy: {training_acc:.2%}")
+    USE_COMBINED_MODEL = True
+except Exception as e:
+    print(f"Error loading model: {e}")
+    print("Will use direct FBCCA classification instead")
+    USE_COMBINED_MODEL = False
 
 def create_reference_signals(freqs, fs, T):
     """Create reference signals for FBCCA"""
@@ -71,25 +91,43 @@ def canonical_correlation(X, Y):
     return s[0]
 
 def classify_epoch(eeg_epoch, stim_freqs, fs=256):
-    """Classify an epoch of EEG data using FBCCA"""
-    # Preprocess the epoch
-    epoch_duration = eeg_epoch.shape[1] / fs
-    
-    # Create reference signals
-    Y_ref = create_reference_signals(stim_freqs, fs, epoch_duration)
-    
-    # Calculate CCA for each frequency
-    corr_values = []
-    for freq in stim_freqs:
-        corr = canonical_correlation(eeg_epoch, Y_ref[freq])
-        corr_values.append(corr)
-    
-    # Get the frequency with highest correlation
-    predicted_idx = np.argmax(corr_values)
-    predicted_freq = stim_freqs[predicted_idx]
-    confidence = corr_values[predicted_idx] / max(sum(corr_values), 1e-10)
-    
-    return predicted_freq, confidence, corr_values
+    """Classify an epoch of EEG data using FBCCA or trained model"""
+    if USE_COMBINED_MODEL:
+        # Extract features for the model
+        features = extract_features([eeg_epoch], stim_freqs, fs)
+        
+        # Scale features
+        features_scaled = scaler.transform(features)
+        
+        # Predict
+        predicted_class = classifier.predict(features_scaled)[0]
+        probabilities = classifier.predict_proba(features_scaled)[0]
+        
+        # Convert class (1-4) to frequency
+        predicted_freq = stim_freqs[predicted_class-1]
+        confidence = probabilities[predicted_class-1]
+        
+        return predicted_freq, confidence, probabilities
+    else:
+        # Traditional FBCCA approach
+        # Preprocess the epoch
+        epoch_duration = eeg_epoch.shape[1] / fs
+        
+        # Create reference signals
+        Y_ref = create_reference_signals(stim_freqs, fs, epoch_duration)
+        
+        # Calculate CCA for each frequency
+        corr_values = []
+        for freq in stim_freqs:
+            corr = canonical_correlation(eeg_epoch, Y_ref[freq])
+            corr_values.append(corr)
+        
+        # Get the frequency with highest correlation
+        predicted_idx = np.argmax(corr_values)
+        predicted_freq = stim_freqs[predicted_idx]
+        confidence = corr_values[predicted_idx] / max(sum(corr_values), 1e-10)
+        
+        return predicted_freq, confidence, corr_values
 
 def find_trigger_intervals(trigger_channel):
     """Find start and end points of each trigger in the data"""
@@ -136,32 +174,58 @@ def process_dataset(file_path, dataset_name):
     
     # Set up plots
     fig = plt.figure(figsize=(14, 12))
-    gs = gridspec.GridSpec(4, 1, height_ratios=[2, 1, 1, 1], hspace=0.4)  # Increased spacing
     
-    # Create subplots
-    ax_eeg = plt.subplot(gs[0])
-    ax_fbcca = plt.subplot(gs[1])
-    ax_confidence = plt.subplot(gs[2])
-    ax_correct = plt.subplot(gs[3])
-    
-    # Initialize plots with more spacing
-    ax_eeg.set_title(f"SSVEP Classification: {dataset_name}", pad=10)
-    ax_eeg.set_ylabel("EEG Amplitude")
-    ax_eeg.set_xlabel("Time (samples)")
-    
-    ax_fbcca.set_title("FBCCA Correlation Values", pad=10)
-    ax_fbcca.set_ylabel("Correlation")
-    ax_fbcca.set_ylim(0, 1)
-    
-    ax_confidence.set_title("Classification Confidence", pad=10)
-    ax_confidence.set_ylabel("Confidence")
-    ax_confidence.set_ylim(0, 1)
-    
-    ax_correct.set_title("Classification Accuracy", pad=10)
-    ax_correct.set_ylabel("Correct")
-    ax_correct.set_ylim(-0.1, 1.1)
-    ax_correct.set_yticks([0, 1])
-    ax_correct.set_yticklabels(["Incorrect", "Correct"])
+    if USE_COMBINED_MODEL:
+        # For combined model, use 3 panels (no FBCCA correlations)
+        gs = gridspec.GridSpec(3, 1, height_ratios=[2, 1, 1], hspace=0.4)
+        
+        # Create subplots
+        ax_eeg = plt.subplot(gs[0])
+        ax_proba = plt.subplot(gs[1])
+        ax_correct = plt.subplot(gs[2])
+        
+        # Initialize plots with more spacing
+        ax_eeg.set_title(f"SSVEP Classification: {dataset_name}", pad=10)
+        ax_eeg.set_ylabel("EEG Amplitude")
+        ax_eeg.set_xlabel("Time (samples)")
+        
+        ax_proba.set_title("Classification Probabilities", pad=10)
+        ax_proba.set_ylabel("Probability")
+        ax_proba.set_ylim(0, 1)
+        
+        ax_correct.set_title("Classification Accuracy", pad=10)
+        ax_correct.set_ylabel("Correct")
+        ax_correct.set_ylim(-0.1, 1.1)
+        ax_correct.set_yticks([0, 1])
+        ax_correct.set_yticklabels(["Incorrect", "Correct"])
+    else:
+        # For FBCCA, use 4 panels including correlation values
+        gs = gridspec.GridSpec(4, 1, height_ratios=[2, 1, 1, 1], hspace=0.4)
+        
+        # Create subplots
+        ax_eeg = plt.subplot(gs[0])
+        ax_fbcca = plt.subplot(gs[1])
+        ax_confidence = plt.subplot(gs[2])
+        ax_correct = plt.subplot(gs[3])
+        
+        # Initialize plots with more spacing
+        ax_eeg.set_title(f"SSVEP Classification: {dataset_name}", pad=10)
+        ax_eeg.set_ylabel("EEG Amplitude")
+        ax_eeg.set_xlabel("Time (samples)")
+        
+        ax_fbcca.set_title("FBCCA Correlation Values", pad=10)
+        ax_fbcca.set_ylabel("Correlation")
+        ax_fbcca.set_ylim(0, 1)
+        
+        ax_confidence.set_title("Classification Confidence", pad=10)
+        ax_confidence.set_ylabel("Confidence")
+        ax_confidence.set_ylim(0, 1)
+        
+        ax_correct.set_title("Classification Accuracy", pad=10)
+        ax_correct.set_ylabel("Correct")
+        ax_correct.set_ylim(-0.1, 1.1)
+        ax_correct.set_yticks([0, 1])
+        ax_correct.set_yticklabels(["Incorrect", "Correct"])
     
     # Process each interval
     all_results = []
@@ -192,10 +256,13 @@ def process_dataset(file_path, dataset_name):
             window = preprocessed_signals[:, j:j+epoch_samples]
             
             # Classify
-            pred_freq, confidence, corr_values = classify_epoch(window, stim_freqs, fs)
-            
-            # Normalize correlation values for display
-            normalized_corr = np.array(corr_values) / max(max(corr_values), 1e-10)
+            if USE_COMBINED_MODEL:
+                pred_freq, confidence, probabilities = classify_epoch(window, stim_freqs, fs)
+                values_to_plot = probabilities
+            else:
+                pred_freq, confidence, corr_values = classify_epoch(window, stim_freqs, fs)
+                # Normalize correlation values for display
+                values_to_plot = np.array(corr_values) / max(max(corr_values), 1e-10)
             
             # Check if prediction is correct
             is_correct = pred_freq == expected_freq
@@ -206,7 +273,7 @@ def process_dataset(file_path, dataset_name):
                 'expected_freq': expected_freq,
                 'predicted_freq': pred_freq,
                 'confidence': confidence,
-                'corr_values': normalized_corr,
+                'values_to_plot': values_to_plot,
                 'is_correct': is_correct
             })
         
@@ -218,7 +285,7 @@ def process_dataset(file_path, dataset_name):
     expected_freqs = [r['expected_freq'] for r in all_results]
     predicted_freqs = [r['predicted_freq'] for r in all_results]
     confidences = [r['confidence'] for r in all_results]
-    all_corr_values = np.array([r['corr_values'] for r in all_results])
+    all_values = np.array([r['values_to_plot'] for r in all_results])
     correct_predictions = [1 if r['is_correct'] else 0 for r in all_results]
     
     # Create plots
@@ -226,25 +293,47 @@ def process_dataset(file_path, dataset_name):
     ax_eeg.plot(times, expected_freqs, 'b--', label='Expected Frequency')
     ax_eeg.legend()
     
-    # Plot FBCCA correlation values
-    for i, freq in enumerate(stim_freqs):
-        ax_fbcca.plot(times, all_corr_values[:, i], label=f"{freq} Hz")
-    ax_fbcca.legend()
-    
-    # Plot confidence
-    ax_confidence.plot(times, confidences)
+    if USE_COMBINED_MODEL:
+        # Plot classification probabilities
+        for i in range(4):  # 4 classes
+            ax_proba.plot(times, all_values[:, i], label=f"Class {i+1} ({stim_freqs[i]} Hz)")
+        ax_proba.legend()
+    else:
+        # Plot FBCCA correlation values
+        for i, freq in enumerate(stim_freqs):
+            ax_fbcca.plot(times, all_values[:, i], label=f"{freq} Hz")
+        ax_fbcca.legend()
+        
+        # Plot confidence
+        ax_confidence.plot(times, confidences)
     
     # Plot correct/incorrect
-    ax_correct.plot(times, correct_predictions, 'g-')
+    if USE_COMBINED_MODEL:
+        ax_correct.plot(times, correct_predictions, 'g-')
+    else:
+        ax_correct.plot(times, correct_predictions, 'g-')
     
     # Calculate accuracy
     accuracy = np.mean(correct_predictions)
     plt.figure(fig.number)  # Ensure we're working with the correct figure
-    plt.suptitle(f"SSVEP Classification: {dataset_name}\nAccuracy: {accuracy:.2%} (Total Samples: {len(all_results)}, Window: 3s)", 
-                 fontsize=16, y=0.98)  # Increased y position to prevent overlap
     
-    # Save figure
-    output_file = f"images/prediction_visualization_{dataset_name.replace(' ', '_').lower()}.png"
+    # Create title based on classification method
+    if USE_COMBINED_MODEL:
+        plt.suptitle(
+            f"SSVEP Classification: {dataset_name} using Combined Model ({classifier_name})\n"
+            f"Accuracy: {accuracy:.2%} (Total Samples: {len(all_results)}, Window: 3s, Training Acc: {training_acc:.2%})", 
+            fontsize=16, y=0.98
+        )
+        # Save figure with different name to avoid overwriting
+        output_file = f"images/combined_model_visualization_{dataset_name.replace(' ', '_').lower()}.png"
+    else:
+        plt.suptitle(
+            f"SSVEP Classification: {dataset_name} using FBCCA\n"
+            f"Accuracy: {accuracy:.2%} (Total Samples: {len(all_results)}, Window: 3s)", 
+            fontsize=16, y=0.98
+        )
+        output_file = f"images/prediction_visualization_{dataset_name.replace(' ', '_').lower()}.png"
+    
     plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust layout to make room for suptitle
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     plt.close()
@@ -254,11 +343,14 @@ def process_dataset(file_path, dataset_name):
     print(f"Visualization saved to {output_file}")
     
     # Create confusion matrix
-    create_confusion_matrix(predicted_freqs, expected_freqs, dataset_name)
+    if USE_COMBINED_MODEL:
+        create_confusion_matrix(predicted_freqs, expected_freqs, dataset_name, True)
+    else:
+        create_confusion_matrix(predicted_freqs, expected_freqs, dataset_name, False)
     
     return accuracy
 
-def create_confusion_matrix(predicted_freqs, expected_freqs, dataset_name):
+def create_confusion_matrix(predicted_freqs, expected_freqs, dataset_name, is_combined_model):
     """Create a confusion matrix for the continuous predictions"""
     import seaborn as sns
     from sklearn.metrics import confusion_matrix
@@ -286,15 +378,26 @@ def create_confusion_matrix(predicted_freqs, expected_freqs, dataset_name):
         count = np.sum(np.array(expected_indices) == i)
         class_counts.append(count)
     
-    # Create a more informative title with sample counts and window info
-    plt.title(f'Continuous Classification Confusion Matrix: {dataset_name}\n'
-              f'Total Samples: {total_samples} (Window Size: 3s, Step: 0.25s)\n'
-              f'Class Distribution: {freq_names[0]}: {class_counts[0]}, {freq_names[1]}: {class_counts[1]}, '
-              f'{freq_names[2]}: {class_counts[2]}, {freq_names[3]}: {class_counts[3]}',
-              pad=20)  # Add padding to prevent overlap
+    # Create a more informative title
+    if is_combined_model:
+        title_prefix = f'Combined Model Classification Confusion Matrix: {dataset_name}\n'
+        title_model = f'Model: {classifier_name}, '
+        output_prefix = "combined_model_confusion_"
+    else:
+        title_prefix = f'FBCCA Classification Confusion Matrix: {dataset_name}\n'
+        title_model = ''
+        output_prefix = "continuous_confusion_matrix_"
+    
+    plt.title(
+        title_prefix +
+        f'{title_model}Total Samples: {total_samples} (Window Size: 3s, Step: 0.25s)\n'
+        f'Class Distribution: {freq_names[0]}: {class_counts[0]}, {freq_names[1]}: {class_counts[1]}, '
+        f'{freq_names[2]}: {class_counts[2]}, {freq_names[3]}: {class_counts[3]}',
+        pad=20
+    )
     
     # Save figure
-    output_file = f"images/continuous_confusion_matrix_{dataset_name.replace(' ', '_').lower()}.png"
+    output_file = f"images/{output_prefix}{dataset_name.replace(' ', '_').lower()}.png"
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     plt.close()
@@ -336,8 +439,10 @@ def visualize_accuracy_results(results):
     names = list(valid_results.keys())
     values = [v * 100 for v in valid_results.values()]
     
-    bars = plt.bar(names, values)
-    bars[-1].set_color('red')  # Highlight average
+    # Determine colors based on subject
+    colors = ['blue' if 'Subject 1' in name else 'green' if 'Subject 2' in name else 'red' for name in names]
+    
+    bars = plt.bar(names, values, color=colors)
     
     # Add accuracy values
     for i, bar in enumerate(bars):
@@ -345,7 +450,14 @@ def visualize_accuracy_results(results):
         plt.text(bar.get_x() + bar.get_width()/2., height + 1,
                 f'{values[i]:.1f}%', ha='center', va='bottom')
     
-    plt.title("Continuous Classification Accuracy")
+    if USE_COMBINED_MODEL:
+        title = f"Combined Model ({classifier_name}) Classification Accuracy"
+        output_file = "images/combined_model_accuracy.png"
+    else:
+        title = "FBCCA Classification Accuracy"
+        output_file = "images/continuous_classification_accuracy.png"
+    
+    plt.title(title)
     plt.xlabel("Dataset")
     plt.ylabel("Accuracy (%)")
     plt.ylim(0, 105)
@@ -354,10 +466,14 @@ def visualize_accuracy_results(results):
     
     # Save figure
     plt.tight_layout()
-    plt.savefig("images/continuous_classification_accuracy.png", dpi=300, bbox_inches='tight')
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
     plt.close()
     
-    print("\n=== Overall Continuous Classification Results ===")
+    if USE_COMBINED_MODEL:
+        print(f"\n=== Overall Combined Model Classification Results ===")
+    else:
+        print(f"\n=== Overall FBCCA Classification Results ===")
+    
     for name, accuracy in valid_results.items():
         print(f"{name}: {accuracy:.1%}")
 
